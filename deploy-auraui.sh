@@ -23,8 +23,8 @@
 #   AURAI_REPO=https://github.com/Furiade54/AURAui.git
 #   AURAI_BRANCH=main
 #   AURAI_INSTALL_DOCKER=0   # 1 = instalar / actualizar Docker por apt si falta
-#   AURAI_BIND_ADDRESS=127.0.0.1   # 127.0.0.1 = solo loopback (segura, NPM)
-#                                  # 0.0.0.0   = pública por IP:50505
+#   AURAI_BIND_ADDRESS=0.0.0.0   # 0.0.0.0   = pública por IP:50505 (accesible directo)
+#                                # 127.0.0.1 = solo loopback (segura, solo NPM en host)
 #   AURAI_USE_NPM_NETWORK=0        # 1 = crea docker-compose.override.yml uniendo
 #                                  #     el servicio a red externa ${AURAI_NPM_NETWORK}
 #   AURAI_NPM_NETWORK=npm_default  # nombre red Docker de nginx-proxy-manager
@@ -100,7 +100,7 @@ Variables de entorno (AuraUI específicas, opcionales):
   AURAI_BRANCH           Rama a deployar (default: main)
   AURAI_INSTALL_DOCKER   1 = instalar/actualizar Docker por apt (default: 0)
   AURAI_BIND_ADDRESS     Bind address del puerto 50505 en Compose
-                         (default: 127.0.0.1, seguro para NPM proxy)
+                         (default: 0.0.0.0, accesible públicamente por IP)
   AURAI_USE_NPM_NETWORK  1 = unir servicio a red Docker NPM (default: 0)
   AURAI_NPM_NETWORK      Nombre red externa NPM (default: npm_default)
   AURAI_CLOBBER_NON_GIT  1 = consentir mv a backup + clone limpio si
@@ -329,7 +329,7 @@ fi
 ok "Working tree limpio (o cambios permitidos)."
 
 # Export bind address para interpolación Compose del yaml
-export AURAI_BIND_ADDRESS="${AURAI_BIND_ADDRESS:-127.0.0.1}"
+export AURAI_BIND_ADDRESS="${AURAI_BIND_ADDRESS:-0.0.0.0}"
 export AURAI_USE_NPM_NETWORK AURAI_NPM_NETWORK
 
 # =============================================================================

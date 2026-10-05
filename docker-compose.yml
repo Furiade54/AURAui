@@ -8,14 +8,13 @@ services:
     restart: unless-stopped
     ports:
       # ---------------------------------------------------------------------
-      # AURAI_BIND_ADDRESS  se lee como variable de entorno.
-      #   · Si no la defines  →  default 127.0.0.1  (solo loopback, SEGURA,
-      #                          solo NPM en el mismo host alcanza el puerto).
-      #   · Si la defines     →  AURAI_BIND_ADDRESS=0.0.0.0  para publicar
-      #                          en todas las interfaces (acceso IP directo).
+      # AURAI_BIND_ADDRESS  se lee como variable de entorno (Compose interpolation).
+      #   · Si no la defines  →  default 0.0.0.0  (pública, accesible por IP:50505)
+      #   · Si la defines     →  AURAI_BIND_ADDRESS=127.0.0.1  para BLOQUEAR el
+      #                          acceso externo y permitir solo loopback/NPM.
       # deploy-auraui.sh se encarga de exportarla por ti.
       # ---------------------------------------------------------------------
-      - "${AURAI_BIND_ADDRESS:-127.0.0.1}:50505:50505"
+      - "${AURAI_BIND_ADDRESS:-0.0.0.0}:50505:50505"
     environment:
       NODE_ENV: production
       SERVER_PORT: 50505
