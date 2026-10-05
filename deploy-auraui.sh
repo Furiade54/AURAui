@@ -23,11 +23,14 @@
 #   AURAI_REPO=https://github.com/Furiade54/AURAui.git
 #   AURAI_BRANCH=main
 #   AURAI_INSTALL_DOCKER=0   # 1 = instalar / actualizar Docker por apt si falta
-#   AURAI_BIND_ADDRESS=127.0.0.1   # 127.0.0.1 = solo loopback (seguro, NPM)
-#                                  # 0.0.0.0   = público por IP:50505
+#   AURAI_BIND_ADDRESS=127.0.0.1   # 127.0.0.1 = solo loopback (segura, NPM)
+#                                  # 0.0.0.0   = pública por IP:50505
 #   AURAI_USE_NPM_NETWORK=0        # 1 = crea docker-compose.override.yml uniendo
 #                                  #     el servicio a red externa ${AURAI_NPM_NETWORK}
 #   AURAI_NPM_NETWORK=npm_default  # nombre red Docker de nginx-proxy-manager
+#   AURAI_CLOBBER_NON_GIT=0        # 1 = permite que si /opt/AURAui existe y NO es
+#                                  #     git, haga mv a .bak.PID + clonar limpio
+#                                  #     (conserva .env.prod / override.yml en backup)
 # =============================================================================
 
 # --------- 1. Strict mode  (Eeuo: -E activa trap ERR en funciones/subshells) ----
@@ -100,6 +103,8 @@ Variables de entorno (AuraUI específicas, opcionales):
                          (default: 127.0.0.1, seguro para NPM proxy)
   AURAI_USE_NPM_NETWORK  1 = unir servicio a red Docker NPM (default: 0)
   AURAI_NPM_NETWORK      Nombre red externa NPM (default: npm_default)
+  AURAI_CLOBBER_NON_GIT  1 = consentir mv a backup + clone limpio si
+                         /opt/AURAui existe pero NO es un repo Git (default: 0)
 
 Ejemplos:
   sudo $0                 # deploy normal (early exit si no hay cambios)
@@ -200,8 +205,46 @@ clone_repo_first_time(){
     install -d -m 0755 "$(dirname "${PROJECT_DIR}")"
   fi
   if [[ -d "${PROJECT_DIR}" ]]; then
-    warn "${PROJECT_DIR} existe pero no es un repo git → backup a ${PROJECT_DIR}.bak.$$"
-    mv "${PROJECT_DIR}" "${PROJECT_DIR}.bak.$$"
+    local BACKUP_DIR="${PROJECT_DIR}.bak.$$"
+    local ENV_BACKUP="" OVER_BACKUP=""
+    [[ -f "${PROJECT_DIR}/.env.prod"                  ]] && ENV_BACKUP="${PROJECT_DIR}/.env.prod"
+    [[ -f "${PROJECT_DIR}/docker-compose.override.yml" ]] && OVER_BACKUP="${PROJECT_DIR}/docker-compose.override.yml"
+    echo
+    error "=============================================================="
+    error "  ${PROJECT_DIR} existe pero NO es un repositorio Git."
+    error "  Para evitar pérdida de datos la acción requiere consentimiento."
+    error "  · Se movería el directorio actual a backup:"
+    error "      ${BACKUP_DIR}"
+    error "  · Se clonaría ${BRANCH} desde ${AURAI_REPO_REMOTE}"
+    error "  · Se CONSERVARÍAN automáticamente (si existen):"
+    [[ -n "$ENV_BACKUP"  ]] && echo "        ✅ .env.prod"
+    [[ -n "$OVER_BACKUP" ]] && echo "        ✅ docker-compose.override.yml"
+    error "=============================================================="
+    echo "  Para CONFIRMAR esta operación, vuelve a ejecutar con:"
+    echo "      AURAI_CLOBBER_NON_GIT=1 sudo $0 $*"
+    echo "  O borra/mueve manualmente ${PROJECT_DIR} antes de ejecutar."
+    echo
+    if [[ "${AURAI_CLOBBER_NON_GIT:-0}" != "1" ]]; then
+      exit 1
+    fi
+    # Usuario dio consentimiento: proceder
+    mv "${PROJECT_DIR}" "${BACKUP_DIR}"
+    log "Directorio movido a backup OK: ${BACKUP_DIR}"
+
+    log "Clonando por primera vez ${AURAI_REPO_REMOTE}#${BRANCH} → ${PROJECT_DIR}"
+    git clone --depth=1 --branch "${BRANCH}" "${AURAI_REPO_REMOTE}" "${PROJECT_DIR}"
+
+    # Restaurar archivos locales IMPORTANTES desde el backup (nunca pisar si ya existen en clone)
+    if [[ -n "$ENV_BACKUP"  ]] && [[ ! -f "${PROJECT_DIR}/.env.prod" ]]; then
+      cp -p "${BACKUP_DIR}/.env.prod" "${PROJECT_DIR}/"
+      ok ".env.prod restaurado desde backup (${BACKUP_DIR})."
+    fi
+    if [[ -n "$OVER_BACKUP" ]] && [[ ! -f "${PROJECT_DIR}/docker-compose.override.yml" ]]; then
+      cp -p "${BACKUP_DIR}/docker-compose.override.yml" "${PROJECT_DIR}/"
+      ok "docker-compose.override.yml restaurado desde backup."
+    fi
+    ok "Repo clonado + datos locales conservados."
+    return 0
   fi
   log "Clonando por primera vez ${AURAI_REPO_REMOTE}#${BRANCH} → ${PROJECT_DIR}"
   git clone --depth=1 --branch "${BRANCH}" "${AURAI_REPO_REMOTE}" "${PROJECT_DIR}"
@@ -297,14 +340,15 @@ if [[ "$LOCAL_SHA" == "$REMOTE_SHA" ]] && (( ! FORCE )); then
 fi
 
 # =============================================================================
-# --------- 9. git pull --ff-only  (nunca merges espurios) ------------------
+# --------- 9. git reset --hard origin/<branch>  (garantiza estado idéntico,
+#            pisa tracked files divergentes, NUNCA toca untracked/.gitignore)
 # =============================================================================
 if ! (( FORCE )); then
   log "Nuevos commits desde $(git rev-parse --short "$LOCAL_SHA") → $(git rev-parse --short "$REMOTE_SHA"):"
   git --no-pager log --oneline "${LOCAL_SHA}..${REMOTE_SHA}" 2>/dev/null | sed 's/^/ • /' || true
 fi
-git pull --ff-only origin "${BRANCH}"
-ok "Pull --ff-only completado → $(git rev-parse --short HEAD)"
+git reset --hard "origin/${BRANCH}"
+ok "reset --hard origin/${BRANCH} completado → $(git rev-parse --short HEAD)"
 
 # =============================================================================
 # --------- 10. Validación .env.prod con REQUIRED_VARS + WARN_VARS ---------
@@ -398,7 +442,7 @@ BACKEND_LOGS_SINCE="5m"
 BACKEND_LOGS="$(dc logs auraui --since "$BACKEND_LOGS_SINCE" 2>/dev/null || true)"
 
 if [[ -z "${BACKEND_LOGS}" ]]; then
-  ok "AuraUI: no reinició (cache de capas intacto). Saltamos revisión logs."
+  ok "AuraUI: sin logs nuevos en los últimos ${BACKEND_LOGS_SINCE} (contenedor ya running, sin restart detectado)."
 else
   # 15a) Genérico (chequeo patrones de error)
   if echo "${BACKEND_LOGS}" | grep -qiE "ERROR|Fallo|No se pudo|Exception|EADDRINUSE|ECONNREFUSED"; then
@@ -420,13 +464,25 @@ fi
 
 # =============================================================================
 # --------- 16. Estado final de cada servicio (healthy/running/KO) ----------
+#            Usa Go-template en lugar de JSON para máxima compatibilidad
+#            Compose v2 plugin / v1 standalone / docker ps fallback
 # =============================================================================
-FAILED=0   # reset: el healthcheck/logs pueden ponerlo a 1
 for svc in "${SERVICES[@]}"; do
-  STATUS_JSON="$(dc ps --format json "$svc" 2>/dev/null || true)"
-  if   echo "$STATUS_JSON" | grep -q '"Health":"healthy"'; then success "$svc healthy"
-  elif echo "$STATUS_JSON" | grep -q '"State":"running"';    then warning "$svc running"
-  else                                                          error "$svc KO"; FAILED=1
+  # 1) Intentar compose ps (v2 o v1) con Go-template pipe-separado
+  STATUS_LINE="$(dc ps --format '{{.Name}}|{{.State}}|{{.Health}}' "$svc" 2>/dev/null || true)"
+  # 2) Fallback: si vacío, usar docker ps por container_name hardcodeado (auraui-vps-monitor)
+  #    Algunos compose antiguos devuelven vacío por nombre de servicio; docker ps siempre tiene el nombre contenedor.
+  if [[ -z "$STATUS_LINE" ]]; then
+    STATUS_LINE="$(docker ps -a --format '{{.Names}}|{{.State}}|{{.Health}}' --filter "name=^/auraui-vps-monitor$" 2>/dev/null || true)"
+  fi
+  STATE="$(echo "$STATUS_LINE" | awk -F'|' '{print $2}' | tr '[:upper:]' '[:lower:]' || true)"
+  HEALTH="$(echo "$STATUS_LINE" | awk -F'|' '{print $3}' | tr '[:upper:]' '[:lower:]' || true)"
+
+  if   [[ "$HEALTH" == *"healthy"* ]]; then success "$svc healthy (${STATE})"
+  elif [[ "$STATE"  == *"running"* ]]; then warning "$svc running (health=${HEALTH:-no-check})"
+  else
+    error "$svc KO (state=${STATE:-unknown}, health=${HEALTH:-n/a})"
+    FAILED=1
   fi
 done
 

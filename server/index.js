@@ -18,7 +18,7 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const server = http.createServer(app);
 const PORT = Number(process.env.SERVER_PORT || 50505);
-const HOST = process.env.HOST || process.env.NODE_ENV === 'production' ? '0.0.0.0' : '127.0.0.1';
+const HOST = process.env.HOST || (process.env.NODE_ENV === 'production' ? '0.0.0.0' : '127.0.0.1');
 const TRUST_PROXY = process.env.TRUST_PROXY === '1' || process.env.NODE_ENV === 'production';
 
 if (TRUST_PROXY) app.set('trust proxy', true);
