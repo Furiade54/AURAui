@@ -18,8 +18,12 @@
 #   export AURAI_INSTALL_DIR="/opt/auraui"
 #   export AURAI_REPO="https://github.com/Furiade54/AURAui.git"
 #   export AURAI_BRANCH="main"
-#   export AURAI_INSTALL_DOCKER=1   # 1 = intentar instalar docker si falta, 0 = no
+#   export AURAI_INSTALL_DOCKER=0   # 1 = instalar docker si falta (VPS NUEVA).  0 = NO tocar Docker (DEFAULT)
 #   export AURAI_FORCE_REBUILD=1    # 1 = --no-cache siempre
+#   export AURAI_BIND_ADDRESS="127.0.0.1"   # "127.0.0.1" = solo loopback / NPM  (DEFAULT, segura)
+#                                           # "0.0.0.0"   = público por IP:50505
+#   export AURAI_JOIN_NPM_NETWORK=0         # 1 = al final, une el contenedor a la red npm_default
+#   export AURAI_NPM_NETWORK="npm_default"  # nombre de la red docker de nginx-proxy-manager
 # =============================================================================
 set -eo pipefail
 
@@ -50,8 +54,20 @@ cmd_exists() { command -v "$1" >/dev/null 2>&1; }
 AURAI_INSTALL_DIR="${AURAI_INSTALL_DIR:-/opt/auraui}"
 AURAI_REPO="${AURAI_REPO:-https://github.com/Furiade54/AURAui.git}"
 AURAI_BRANCH="${AURAI_BRANCH:-main}"
-AURAI_INSTALL_DOCKER="${AURAI_INSTALL_DOCKER:-1}"
+
+# Seguridad por defecto: NO INSTALAMOS Docker automáticamente.
+# Así no se modifica por accidente una VPS con múltiples apps ya corriendo.
+# Solo instala Docker si EXPLÍCITAMENTE ejecutas:  AURAI_INSTALL_DOCKER=1 sudo ./deploy-auraui.sh
+AURAI_INSTALL_DOCKER="${AURAI_INSTALL_DOCKER:-0}"
+
 AURAI_FORCE_REBUILD="${AURAI_FORCE_REBUILD:-0}"
+
+# Bind address del puerto 50505. Por defecto SOLO loopback (solo NPM en el
+# mismo host puede alcanzarlo). Si quieres acceso público directo por IP,
+# pon 0.0.0.0.
+AURAI_BIND_ADDRESS="${AURAI_BIND_ADDRESS:-127.0.0.1}"
+AURAI_JOIN_NPM_NETWORK="${AURAI_JOIN_NPM_NETWORK:-0}"
+AURAI_NPM_NETWORK="${AURAI_NPM_NETWORK:-npm_default}"
 
 DOCKER_MIN_MAJOR=24
 COMPOSE_MIN_V2=2
@@ -63,8 +79,10 @@ require_root
 log "Iniciando despliegue AuraUI VPS Monitor..."
 log "Directorio destino : ${AURAI_INSTALL_DIR}"
 log "Repo               : ${AURAI_REPO} (rama ${AURAI_BRANCH})"
-log "Instalar Docker?   : ${AURAI_INSTALL_DOCKER}"
+log "Instalar Docker?   : ${AURAI_INSTALL_DOCKER}  (0 = seguro, no toca paquetes)"
 log "Rebuild sin cache? : ${AURAI_FORCE_REBUILD}"
+log "Bind address :50505: ${AURAI_BIND_ADDRESS}"
+log "Unir a red NPM?    : ${AURAI_JOIN_NPM_NETWORK}  (red=${AURAI_NPM_NETWORK})"
 echo
 
 # =============================================================================
@@ -97,18 +115,23 @@ install_docker_ubuntu() {
 }
 
 ensure_docker() {
-  if cmd_exists docker && cmd_exists docker; then
+  if cmd_exists docker; then
     local dv; dv="$(docker version --format '{{.Server.Version}}' 2>/dev/null || echo 0.0.0)"
     local dmj; dmj="$(echo "${dv}" | cut -d. -f1)"
     if [ "${dmj}" -ge "${DOCKER_MIN_MAJOR}" ]; then
       ok "Docker ${dv} detectado (>= ${DOCKER_MIN_MAJOR})"
     else
-      warn "Docker ${dv} es antiguo (< ${DOCKER_MIN_MAJOR}). Intentaremos actualizarlo."
-      install_docker_ubuntu
+      warn "Docker ${dv} es antiguo (< ${DOCKER_MIN_MAJOR})."
+      if [ "${AURAI_INSTALL_DOCKER}" = "1" ]; then
+        log "AURAI_INSTALL_DOCKER=1 → intentando actualizar..."
+        install_docker_ubuntu
+      else
+        warn "  ⚠️  Instala / actualiza Docker manualmente o ejecuta con AURAI_INSTALL_DOCKER=1."
+      fi
     fi
   else
     if [ "${AURAI_INSTALL_DOCKER}" = "1" ]; then
-      log "Docker no detectado. Instalándolo automáticamente..."
+      log "Docker no detectado. AURAI_INSTALL_DOCKER=1 → instalando..."
       install_docker_ubuntu
     else
       fail "Docker no está instalado y AURAI_INSTALL_DOCKER=0. Instálalo manualmente o usa el modo 1."
@@ -130,13 +153,17 @@ ensure_docker
 # =============================================================================
 fetch_code() {
   if [ -d "${AURAI_INSTALL_DIR}/.git" ]; then
-    log "Actualizando código existente en ${AURAI_INSTALL_DIR} (git pull)..."
+    log "Actualizando código existente en ${AURAI_INSTALL_DIR} (git fetch + reset hard)..."
     cd "${AURAI_INSTALL_DIR}"
     # Asegurarse de que la rama correcta está trackeada
     git remote set-url origin "${AURAI_REPO}" 2>/dev/null || true
     git fetch --depth=1 origin "${AURAI_BRANCH}" 2>/dev/null || git fetch --depth=1 origin
+    # ---------------------------------------------------------------------
+    # 🚨 NO HACEMOS `git clean -fd` PORQUE BORRARÍA .env.prod y OTROS
+    # archivos locales NO versionados (y .env.prod NO DEBE estar en Git).
+    # Solo hacemos reset --hard: actualiza tracked files; ignora untracked.
+    # ---------------------------------------------------------------------
     git reset --hard "origin/${AURAI_BRANCH}" 2>/dev/null || git reset --hard FETCH_HEAD
-    git clean -fd
     ok "Código actualizado a origin/${AURAI_BRANCH}"
   else
     log "Clonando repo por primera vez en ${AURAI_INSTALL_DIR}..."
@@ -153,52 +180,88 @@ fetch_code() {
 fetch_code
 
 # =============================================================================
-# PASO 3: Comprobar ficheros críticos y preparar .env.prod (si no existe)
+# PASO 3: Comprobar ficheros críticos y preparar .env.prod
 # =============================================================================
 [ -f "docker-compose.yml" ] || fail "Falta docker-compose.yml en el repo (commit erroneo?)."
 [ -f "Dockerfile"         ] || fail "Falta Dockerfile en el repo."
 
-# Detectar qué plantilla de .env tenemos disponible:
-#   · Preferimos  .env.prod.example  (específica producción, sin keys dev)
-#   · Fallback   a .env.example      (genérica dev)
-#   · Si no existe ninguna → skip, sin warning (el 99% de los usuarios NO
-#     necesitan .env.prod: credenciales VPS por UI en localStorage).
-ENV_TEMPLATE=""
-if   [ -f ".env.prod.example" ]; then
-  ENV_TEMPLATE=".env.prod.example"
-  ok "Plantilla de entorno producción detectada: ${ENV_TEMPLATE}"
-elif [ -f ".env.example" ]; then
-  ENV_TEMPLATE=".env.example"
-  warn ".env.prod.example no encontrada — usaremos la genérica .env.example (también válida)."
+# ---------------------------------------------------------------------------
+# .env.prod ES OBLIGATORIO porque docker-compose.yml declara
+#   env_file:  - .env.prod
+# Si no existiera, Docker Compose FALLA con:
+#   Couldn't find env file: .../.env.prod
+#
+# Solución robusta, en este orden de preferencia:
+#   a) Si .env.prod ya EXISTE          → NO lo tocamos (tiene credenciales reales).
+#   b) Si existe .env.example          → lo copiamos como plantilla informativa.
+#   c) Si no hay NINGUNA plantilla     → creamos .env.prod VACÍO.
+# ---------------------------------------------------------------------------
+if [ -f ".env.prod" ]; then
+  ok ".env.prod detectado (conservando tus valores locales)."
 else
-  ENV_TEMPLATE=""
+  if [ -f ".env.example" ]; then
+    log ".env.prod no existe → copiando plantilla .env.example"
+    log "  📝 Nota: es OPCIONAL editarla. Si la dejas como está, cada usuario"
+    log "     introduce sus credenciales VPS en Ajustes > Conexión VPS (UI)."
+    cp -n .env.example .env.prod
+  else
+    warn "No se encontró ninguna plantilla de entorno."
+    warn "Creando .env.prod VACÍO para que docker-compose no falle..."
+    : > .env.prod
+  fi
 fi
 
-if [ -n "${ENV_TEMPLATE}" ] && [ ! -f ".env.prod" ]; then
-  log ".env.prod no existe → copiando plantilla (${ENV_TEMPLATE})."
-  log "  📝 Nota: es OPCIONAL editarla. Si la dejas como está, cada usuario"
-  log "     introduce sus credenciales VPS en Ajustes > Conexión VPS (UI)."
-  cp -n "${ENV_TEMPLATE}" .env.prod
-fi
+# ---------------------------------------------------------------------------
+# PASO 3.5: Aplicar AURAI_BIND_ADDRESS al docker-compose.yml (ports)
+# Reemplazamos cualquier línea "- "...:50505:50505" por la elegida por el user.
+# Así no hace falta editar el yaml a mano en cada despliegue.
+# ---------------------------------------------------------------------------
+log "Aplicando bind address en docker-compose.yml:  ${AURAI_BIND_ADDRESS}:50505:50505"
+sed -i -E "s|^[[:space:]]*-[[:space:]]*\"?[0-9.:]+:50505:50505\"?|      - \"${AURAI_BIND_ADDRESS}:50505:50505\"|" docker-compose.yml
+ok "docker-compose.yml bind address actualizado."
 
 # =============================================================================
-# PASO 4: Build + up
+# PASO 4: Build PRIMERO, después up -d (cero downtime)
+# -----------------------------------------------------------------------------
+# ORDEN ANTES (down → build → up):  downtime durante TODO el build (minutos).
+# ORDEN AHORA (build → up -d):      el contenedor ANTIGUO SIGUE CORRIENDO
+#                                    mientras construimos la imagen nueva.
+#                                    docker compose up -d recrea el contenedor
+#                                    ~1s cuando la imagen ya está lista.
 # =============================================================================
 BUILD_ARGS=()
 if [ "${AURAI_FORCE_REBUILD}" = "1" ]; then
   BUILD_ARGS+=(--no-cache)
 fi
 
-log "Deteniendo versión anterior (si la hay)..."
-docker compose down || true
-
 log "Construyendo imagen AuraUI (multi-stage alpine) — esto tarda 2–4 min..."
+log "  (el contenedor anterior sigue en marcha mientras se construye ✔)"
 docker compose build "${BUILD_ARGS[@]}"
 ok "Build completado"
 
-log "Levantando contenedor auraui-vps-monitor..."
+log "Aplicando nueva imagen (docker compose up -d)..."
 docker compose up -d
-ok "Contenedor levantado"
+ok "Contenedor recreado con la nueva imagen"
+
+# ---------------------------------------------------------------------------
+# PASO 4.5: (Opcional) Unir contenedor a red Docker de nginx-proxy-manager
+#   Así NPM puede alcanzar AuraUI directamente por hostname sin IP:
+#     forward host = auraui-vps-monitor   forward port = 50505
+# ---------------------------------------------------------------------------
+if [ "${AURAI_JOIN_NPM_NETWORK}" = "1" ]; then
+  log "AURAI_JOIN_NPM_NETWORK=1 → conectando a red docker '${AURAI_NPM_NETWORK}'..."
+  if docker network inspect "${AURAI_NPM_NETWORK}" >/dev/null 2>&1; then
+    if docker network connect "${AURAI_NPM_NETWORK}" auraui-vps-monitor 2>/dev/null; then
+      ok "Contenedor auraui-vps-monitor unido a red '${AURAI_NPM_NETWORK}'."
+    else
+      # Puede que ya estuviera conectado (no es fallo)
+      warn "  No se pudo conectar (probablemente ya estaba unido o el contenedor no está listo)."
+    fi
+  else
+    warn "  La red docker '${AURAI_NPM_NETWORK}' no existe. La crea nginx-proxy-manager al instalarse."
+    warn "  Comprueba con:  docker network ls | grep npm"
+  fi
+fi
 
 # =============================================================================
 # PASO 5: Esperar a que arranque + healthcheck /api/health
@@ -243,14 +306,25 @@ echo "=============================================================="
 echo "  Contenedor : auraui-vps-monitor"
 echo "  Directorio : ${AURAI_INSTALL_DIR}"
 echo "  Health     : ${HEALTH_URL}"
-echo "  Puerto     : 0.0.0.0:50505 -> 50505/tcp"
+echo "  Bind addrs : ${AURAI_BIND_ADDRESS}:50505 -> 50505/tcp"
 echo
-if [ -n "${PUBLIC_IP}" ]; then
-  echo "  Acceso directo (IP pública):  http://${PUBLIC_IP}:50505"
+
+if [ -n "${PUBLIC_IP}" ] && [ "${AURAI_BIND_ADDRESS}" = "0.0.0.0" ]; then
+  echo "  Acceso directo por IP     :  http://${PUBLIC_IP}:50505"
+elif [ -n "${PUBLIC_IP}" ]; then
+  echo "  (bind 127.0.0.1 → NO accesible directo por IP pública)"
+  echo "  Entra por nginx-proxy-manager o usa ssh tunel:"
+  echo "      ssh -L 50505:127.0.0.1:50505 ist@${PUBLIC_IP}"
+  echo "      y abre en tu navegador:  http://127.0.0.1:50505"
 fi
 echo
 echo "  Si usas nginx-proxy-manager (NPM):"
-echo "    · Forward Host : 127.0.0.1   (o mete AuraUI en la red npm_default)"
+if [ "${AURAI_JOIN_NPM_NETWORK}" = "1" ]; then
+  echo "    · Forward Host : auraui-vps-monitor   (por red docker '${AURAI_NPM_NETWORK}')"
+else
+  echo "    · Forward Host : 127.0.0.1"
+  echo "         o une el contenedor a la red npm  →  AURAI_JOIN_NPM_NETWORK=1"
+fi
 echo "    · Forward Port : 50505"
 echo "    · ☑ Websockets Support (O BLIGATORIO para la terminal SSH)"
 echo
@@ -258,5 +332,5 @@ echo "  Comandos rápidos:"
 echo "    · Ver logs    : docker compose -f ${AURAI_INSTALL_DIR}/docker-compose.yml logs -f --tail=50 auraui"
 echo "    · Reiniciar   : cd ${AURAI_INSTALL_DIR} && docker compose restart auraui"
 echo "    · Parar       : cd ${AURAI_INSTALL_DIR} && docker compose down"
-echo "    · Actualizar  : Volver a ejecutar ESTE MISMO script (hará git pull + rebuild + up)"
+echo "    · Actualizar  : sudo /opt/auraui/deploy-auraui.sh  (o el curl one-liner, se actualiza solo)"
 echo "=============================================================="

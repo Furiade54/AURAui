@@ -7,12 +7,27 @@ services:
     container_name: auraui-vps-monitor
     restart: unless-stopped
     ports:
-      - "0.0.0.0:50505:50505"
+      # ---------------------------------------------------------------------
+      # PREFERENCIA PRODUCCIÓN con nginx-proxy-manager:
+      #   · Publica SOLO en loopback 127.0.0.1 (no accesible desde fuera).
+      #   · Únicamente nginx-proxy-manager del mismo host podrá alcanzarlo.
+      # ---------------------------------------------------------------------
+      # Si NO usas NPM y quieres que sea directamente público por IP:
+      #   cambia  127.0.0.1  →  0.0.0.0
+      # ---------------------------------------------------------------------
+      - "127.0.0.1:50505:50505"
     environment:
       NODE_ENV: production
       SERVER_PORT: 50505
       HOST: 0.0.0.0
       TRUST_PROXY: "1"
+    # ---------------------------------------------------------------------
+    # env_file:   docker-compose RECHAZA si este archivo NO existe.
+    #   · El script deploy-auraui.sh se encarga de crear .env.prod:
+    #       a) copiando desde .env.example (si .env.prod no existía), o
+    #       b) creando un archivo VACÍO si ni siquiera hay plantilla.
+    #   · Así nunca tendremos "Couldn't find env file: .env.prod"
+    # ---------------------------------------------------------------------
     env_file:
       - .env.prod
     logging:
@@ -26,3 +41,18 @@ services:
       timeout: 6s
       retries: 4
       start_period: 20s
+
+# ---------------------------------------------------------------------------
+# (OPCIONAL si usas nginx-proxy-manager en CONTENEDOR DIFERENTE del mismo host)
+#   · Descomenta el bloque de abajo y pon name: npm_default  (la red que
+#     creó tu nginx-proxy-manager). Después:
+#        docker compose up -d
+#        docker network connect npm_default auraui-vps-monitor
+#     o añade la sección networks y ya lo trae automáticamente.
+#   · En NPM: Forward Host  = auraui-vps-monitor   Forward Port = 50505
+#             ☑ Websockets Support (obligatorio para terminal SSH real)
+# ---------------------------------------------------------------------------
+# networks:
+#   default:
+#     external: true
+#     name: npm_default
