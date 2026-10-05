@@ -389,7 +389,7 @@ if (( ${#WARN_VARS[@]} > 0 )); then
 fi
 ok ".env.prod validado."
 
-# Aplicar NPM override (crea override.yml si es necesario) DESPUÉS del pull
+# Aplicar NPM override (crea override.yml si es necesario) DESPUÉS del reset --hard
 apply_npm_network_override
 
 # =============================================================================
@@ -454,11 +454,11 @@ else
   fi
 
   # 15b) ESPECÍFICO AURAUI: marcas de arranque correcto del backend Express
-  #      (server/index.js imprime mensaje al levantar listener)
-  if echo "${BACKEND_LOGS}" | grep -qiE "SERVER_PORT|Server listening|server.*ready|AuraUI backend|Host 0\.0\.0\.0"; then
-    success "AuraUI backend: arranque correcto detectado en logs."
+  #      (server/index.js:169  imprime "[server] AuraUI VPS Monitor running on http://HOST:PORT")
+  if echo "${BACKEND_LOGS}" | grep -qE '\[server\] AuraUI VPS Monitor running on http'; then
+    success "AuraUI backend: arranque correcto detectado en logs (listening on HOST:PORT)."
   else
-    warning "AuraUI backend: no se detectó mensaje de arranque OK en logs. Revisa si el healthcheck fue por timing."
+    warning "AuraUI backend: no se detectó el mensaje de arranque OK '[server] AuraUI VPS Monitor running on http'. Revisa logs si el health fallara."
   fi
 fi
 
@@ -572,14 +572,14 @@ fi
 # [x]  6. Valida $PROJECT_DIR, .git, $COMPOSE_FILE
 # [x]  7. Guarda git status --porcelain e IGNORA el propio deploy-auraui.sh + .env.prod + override.yml
 # [x]  8. Fetch + early exit cuando local==remote y sin --force
-# [x]  9. git pull --ff-only (nunca plain pull)
+# [x]  9. git fetch + git reset --hard origin/<branch> (no diverge, NO toca untracked/.gitignore)
 # [x] 10. .env.prod validado; REQUIRED_VARS bloqueante + WARN_VARS warning en subshell
 # [x] 11. dc config --quiet antes de build
 # [x] 12. dc build (con --no-cache si FORCE)
 # [x] 13. dc up -d --remove-orphans
 # [x] 14. Healthcheck HTTP wait_for_http con timeout (60s)
-# [x] 15. Revisión logs auraui --since 5m; chequeo genérico ERROR + bloque específico AuraUI (arranque)
-# [x] 16. dc ps por servicio, marca healthy/running/KO
+# [x] 15. Revisión logs auraui --since 5m; chequeo genérico ERROR + bloque específico AuraUI ([server] running on http)
+# [x] 16. dc ps / docker ps fallback Go-template (Name|State|Health), marca healthy/running/KO
 # [x] 17. Prune condicional solo si FAILED==0 (dangling images)
 # [x] 18. Resumen final: URLs/commit/rama, exit 0 o exit 1 con comandos
 # [ ] 19. (lo haces manualmente en la VPS) bash -n deploy-auraui.sh → exit 0
