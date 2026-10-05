@@ -77,9 +77,9 @@ FAILED=0   # variable global: 0 = OK, >0 = algún fallo en health/logs/status
 trap 'err "Fallo en la línea $LINENO. Código exit: $?";
       echo;
       echo "Comandos útiles para depurar:";
-      echo "  $DC -f $PROJECT_DIR/$COMPOSE_FILE logs --tail=120 auraui";
-      echo "  $DC -f $PROJECT_DIR/$COMPOSE_FILE ps";
-      echo "  cd $PROJECT_DIR && $DC config --quiet";
+      echo "  ${DC[*]} -f $PROJECT_DIR/$COMPOSE_FILE logs --tail=120 auraui";
+      echo "  ${DC[*]} -f $PROJECT_DIR/$COMPOSE_FILE ps";
+      echo "  cd $PROJECT_DIR && ${DC[*]} config --quiet";
       exit 1' ERR
 
 # =============================================================================
@@ -127,14 +127,24 @@ if [[ "${AURAI_FORCE_REBUILD:-0}" == "1" ]]; then FORCE=1; fi
 # =============================================================================
 # --------- 5. Detectar Docker Compose: plugin v2 O standalone legacy -------
 # =============================================================================
+# detect_docker_compose(): escribe el array DC por referencia (global)
+#   - Devuelve 0 si encontró alguno, 1 si ninguno.
+#   - Popula el array GLOBAL DC[] con "docker" "compose"  o  "docker-compose"
+# =============================================================================
 detect_docker_compose(){
-  if docker compose version >/dev/null 2>&1; then echo "docker compose";
-  elif cmd_exists docker-compose; then echo "docker-compose";
-  else return 1; fi
+  if docker compose version >/dev/null 2>&1; then
+    DC=(docker compose)
+  elif cmd_exists docker-compose; then
+    DC=(docker-compose)
+  else
+    DC=()
+    return 1
+  fi
+  return 0
 }
-DC="$(detect_docker_compose || true)"
-[[ -z "$DC" ]] && { err "No se detectó Docker Compose (plugin v2 ni docker-compose standalone). Instálalo primero o ejecuta con AURAI_INSTALL_DOCKER=1."; exit 1; }
-dc(){ "$DC" -f "$COMPOSE_FILE" "$@"; }
+detect_docker_compose || true
+(( ${#DC[@]} == 0 )) && { err "No se detectó Docker Compose (plugin v2 ni docker-compose standalone). Instálalo primero o ejecuta con AURAI_INSTALL_DOCKER=1."; exit 1; }
+dc(){ "${DC[@]}" -f "$COMPOSE_FILE" "$@"; }
 
 # =============================================================================
 # Funciones auxiliares específicas de AuraUI
@@ -193,9 +203,9 @@ ensure_docker(){
     fi
   fi
   # Re-detectar Compose (por si acabamos de actualizar Docker con plugin v2)
-  DC="$(detect_docker_compose || true)"
-  [[ -z "$DC" ]] && { err "Aún no hay Docker Compose tras instalar Docker. Revisa la instalación."; exit 1; }
-  ok "Docker Compose OK: $($DC version --short 2>/dev/null || true)"
+  detect_docker_compose || true
+  (( ${#DC[@]} == 0 )) && { err "Aún no hay Docker Compose tras instalar Docker. Revisa la instalación."; exit 1; }
+  ok "Docker Compose OK: $("${DC[@]}" version --short 2>/dev/null || true)"
 }
 
 # Clona el repo POR PRIMERA VEZ si el directorio destino no existe o no es git
@@ -554,9 +564,9 @@ else
   echo "  Rama       : ${BRANCH}"
   echo
   echo "  Comandos útiles:"
-  echo "   $DC -f ${PROJECT_DIR}/${COMPOSE_FILE} logs --tail=120 auraui"
-  echo "   $DC -f ${PROJECT_DIR}/${COMPOSE_FILE} ps"
-  echo "   cd ${PROJECT_DIR} && $DC config --quiet"
+  echo "   ${DC[*]} -f ${PROJECT_DIR}/${COMPOSE_FILE} logs --tail=120 auraui"
+  echo "   ${DC[*]} -f ${PROJECT_DIR}/${COMPOSE_FILE} ps"
+  echo "   cd ${PROJECT_DIR} && ${DC[*]} config --quiet"
   echo "=============================================================="
   exit 1
 fi
