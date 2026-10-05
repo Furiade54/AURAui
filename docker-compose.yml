@@ -8,14 +8,14 @@ services:
     restart: unless-stopped
     ports:
       # ---------------------------------------------------------------------
-      # PREFERENCIA PRODUCCIÓN con nginx-proxy-manager:
-      #   · Publica SOLO en loopback 127.0.0.1 (no accesible desde fuera).
-      #   · Únicamente nginx-proxy-manager del mismo host podrá alcanzarlo.
+      # AURAI_BIND_ADDRESS  se lee como variable de entorno.
+      #   · Si no la defines  →  default 127.0.0.1  (solo loopback, SEGURA,
+      #                          solo NPM en el mismo host alcanza el puerto).
+      #   · Si la defines     →  AURAI_BIND_ADDRESS=0.0.0.0  para publicar
+      #                          en todas las interfaces (acceso IP directo).
+      # deploy-auraui.sh se encarga de exportarla por ti.
       # ---------------------------------------------------------------------
-      # Si NO usas NPM y quieres que sea directamente público por IP:
-      #   cambia  127.0.0.1  →  0.0.0.0
-      # ---------------------------------------------------------------------
-      - "127.0.0.1:50505:50505"
+      - "${AURAI_BIND_ADDRESS:-127.0.0.1}:50505:50505"
     environment:
       NODE_ENV: production
       SERVER_PORT: 50505
@@ -43,14 +43,12 @@ services:
       start_period: 20s
 
 # ---------------------------------------------------------------------------
-# (OPCIONAL si usas nginx-proxy-manager en CONTENEDOR DIFERENTE del mismo host)
-#   · Descomenta el bloque de abajo y pon name: npm_default  (la red que
-#     creó tu nginx-proxy-manager). Después:
-#        docker compose up -d
-#        docker network connect npm_default auraui-vps-monitor
-#     o añade la sección networks y ya lo trae automáticamente.
-#   · En NPM: Forward Host  = auraui-vps-monitor   Forward Port = 50505
-#             ☑ Websockets Support (obligatorio para terminal SSH real)
+# (OPCIÓN 1 — CONVENCIONAL) Red externa de Nginx Proxy Manager:
+#   · Descomenta este bloque, y asegúrate de que el nombre coincida con la
+#     red que creó tu nginx-proxy-manager (normalmente npm_default).
+#   · O mejor: usa deploy-auraui.sh con AURAI_USE_NPM_NETWORK=1
+#     (crea automáticamente docker-compose.override.yml, lo que sobrevive
+#      a recreaciones del contenedor mejor que `docker network connect`).
 # ---------------------------------------------------------------------------
 # networks:
 #   default:
