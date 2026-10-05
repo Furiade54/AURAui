@@ -1,0 +1,6 @@
+{
+  "name": "AuraOS",
+  "description": "Sistema operativo moderno en el navegador con interfaz translúcida inspirada en macOS, gestión fluida de ventanas, dock dinámico y aplicaciones interactivas.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
