@@ -157,11 +157,28 @@ fetch_code
 # =============================================================================
 [ -f "docker-compose.yml" ] || fail "Falta docker-compose.yml en el repo (commit erroneo?)."
 [ -f "Dockerfile"         ] || fail "Falta Dockerfile en el repo."
-[ -f ".env.prod.example"  ] || warn ".env.prod.example no encontrado — no hay plantilla de credenciales VPS fijas."
 
-if [ ! -f ".env.prod" ] && [ -f ".env.prod.example" ]; then
-  warn ".env.prod no existe → copiando plantilla .env.prod.example (edítala si quieres forzar VPS fija)."
-  cp -n .env.prod.example .env.prod
+# Detectar qué plantilla de .env tenemos disponible:
+#   · Preferimos  .env.prod.example  (específica producción, sin keys dev)
+#   · Fallback   a .env.example      (genérica dev)
+#   · Si no existe ninguna → skip, sin warning (el 99% de los usuarios NO
+#     necesitan .env.prod: credenciales VPS por UI en localStorage).
+ENV_TEMPLATE=""
+if   [ -f ".env.prod.example" ]; then
+  ENV_TEMPLATE=".env.prod.example"
+  ok "Plantilla de entorno producción detectada: ${ENV_TEMPLATE}"
+elif [ -f ".env.example" ]; then
+  ENV_TEMPLATE=".env.example"
+  warn ".env.prod.example no encontrada — usaremos la genérica .env.example (también válida)."
+else
+  ENV_TEMPLATE=""
+fi
+
+if [ -n "${ENV_TEMPLATE}" ] && [ ! -f ".env.prod" ]; then
+  log ".env.prod no existe → copiando plantilla (${ENV_TEMPLATE})."
+  log "  📝 Nota: es OPCIONAL editarla. Si la dejas como está, cada usuario"
+  log "     introduce sus credenciales VPS en Ajustes > Conexión VPS (UI)."
+  cp -n "${ENV_TEMPLATE}" .env.prod
 fi
 
 # =============================================================================
